@@ -15,9 +15,7 @@ catkin_make
 ~~~
 
 
-2. 测试机械臂
-
-+ 如需机械臂代码求联系松灵客户
+2. 测试
 
 ~~~python
 # 1 setup rule
