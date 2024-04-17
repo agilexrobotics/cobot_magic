@@ -1,8 +1,5 @@
 # 1 环境配置
 
-+ 使用cobot提供的iso镜像文件安装系统，该镜像已经完美适配cobot-magic工程，镜像[百度网盘下载地址]()
-
-
 1. 下载cobot-magic工程
 ~~~python
 git clone https://github.com/agilexrobotics/cobot_magic.git
@@ -19,6 +16,8 @@ catkin_make
 
 
 2. 测试机械臂
+
++ 如需机械臂代码求联系松灵客户
 
 ~~~python
 # 1 setup rule
