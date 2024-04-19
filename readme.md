@@ -1,12 +1,5 @@
 # mobile-aloha
 
-**欢迎扫码进mobile-aloha-VX群交流与合作**
-
-<p align="center">
-  <img src="./collect_data/docs/2.png" width="500" height="638" />
-</p>
-
-
 
 # 1 环境配置
 
