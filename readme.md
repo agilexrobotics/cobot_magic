@@ -73,4 +73,9 @@ cd remote_control
 python act/inference.py --ckpt_dir ~/train0314/
 ~~~
 
+---
+
+# 联系我们
+
+![](./coloect_data/docs/1.jpg)
 
