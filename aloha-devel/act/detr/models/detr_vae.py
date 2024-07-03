@@ -160,10 +160,14 @@ class DETRVAE(nn.Module):
         # fold camera dimension into width dimension
         src = torch.cat(all_cam_features, axis=3)
         src_pos = torch.cat(all_cam_pos, axis=3)
+        # hs = self.transformer(self.query_embed.weight,
+        #                       src, src_pos, None,
+        #                       robot_state_input, self.robot_state_pos.weight,
+        #                       latent_input, self.latent_pos.weight)[0]
         hs = self.transformer(self.query_embed.weight,
                               src, src_pos, None,
                               robot_state_input, self.robot_state_pos.weight,
-                              latent_input, self.latent_pos.weight)[0]
+                              latent_input, self.latent_pos.weight)[-1]
         a_hat = self.action_head(hs)
         return a_hat, [mu, logvar]
 

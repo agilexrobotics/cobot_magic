@@ -41,8 +41,9 @@ class EpisodicDataset(torch.utils.data.Dataset):
                 original_action_shape = (original_action_shape[0], original_action_shape[1] + 2)
 
             start_ts = np.random.choice(max_action_len)  # 随机抽取一个索引
-            actions = root['/observations/qpos'][1:]
-            actions = np.append(actions, actions[-1][np.newaxis, :], axis=0)
+            # actions = root['/observations/qpos'][1:]
+            # actions = np.append(actions, actions[-1][np.newaxis, :], axis=0)
+            actions = root['/action']
             qpos = root['/observations/qpos'][start_ts]
             if self.use_robot_base:
                 qpos = np.concatenate((qpos, root['/base_action'][start_ts]), axis=0)

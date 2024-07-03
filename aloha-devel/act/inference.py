@@ -27,7 +27,6 @@ import threading
 import math
 import threading
 
-
 import sys
 sys.path.append("./")
 
@@ -43,10 +42,10 @@ def actions_interpolation(args, pre_action, actions, stats):
     steps = np.concatenate((np.array(args.arm_steps_length), np.array(args.arm_steps_length)), axis=0)
     pre_process = lambda s_qpos: (s_qpos - stats['qpos_mean']) / stats['qpos_std']
     post_process = lambda a: a * stats['qpos_std'] + stats['qpos_mean']
+    
     result = [pre_action]
     post_action = post_process(actions[0])
-    # print("pre_action:", pre_action[7:])
-    # print("actions_interpolation1:", post_action[:, 7:])
+
     max_diff_index = 0
     max_diff = -1
     for i in range(post_action.shape[0]):
@@ -66,7 +65,6 @@ def actions_interpolation(args, pre_action, actions, stats):
     while len(result) < args.chunk_size+1:
         result.append(result[-1])
     result = np.array(result)[1:args.chunk_size+1]
-    # print("actions_interpolation2:", result.shape, result[:, 7:])
     result = pre_process(result)
     result = result[np.newaxis, :]
     return result
@@ -76,7 +74,7 @@ def get_model_config(args):
     # 设置随机种子，你可以确保在相同的初始条件下，每次运行代码时生成的随机数序列是相同的。
     set_seed(1)
    
-    # 如果是ACT策略
+    # act policy
     # fixed parameters
     if args.policy_class == 'ACT':
         policy_config = {'lr': args.lr,
@@ -109,7 +107,7 @@ def get_model_config(args):
                          'dilation': args.dilation,
                          'position_embedding': args.position_embedding,
                          'loss_function': args.loss_function,
-                         'chunk_size': 1,     # 查询
+                         'chunk_size': 1,     
                          'camera_names': task_config['camera_names'],
                          'use_depth_image': args.use_depth_image,
                          'use_robot_base': args.use_robot_base
@@ -124,7 +122,7 @@ def get_model_config(args):
                          'dilation': args.dilation,
                          'position_embedding': args.position_embedding,
                          'loss_function': args.loss_function,
-                         'chunk_size': args.chunk_size,     # 查询
+                         'chunk_size': args.chunk_size,     
                          'camera_names': task_config['camera_names'],
                          'use_depth_image': args.use_depth_image,
                          'use_robot_base': args.use_robot_base,
@@ -183,6 +181,17 @@ def get_depth_image(observation, camera_names):
 
 
 def inference_process(args, config, ros_operator, policy, stats, t, pre_action):
+    """_summary_
+
+    Args:
+        args (_type_): _description_   cnfig one
+        config (_type_): _description_ cnfig two
+        ros_operator (_type_): _description_ ROS
+        policy (_type_): _description_ model policy
+        stats (_type_): _description_  统计值
+        t (_type_): _description_      timestep[index]
+        pre_action (_type_): _description_ previous actions
+    """
     global inference_lock
     global inference_actions
     global inference_timestep
@@ -190,8 +199,9 @@ def inference_process(args, config, ros_operator, policy, stats, t, pre_action):
     pre_pos_process = lambda s_qpos: (s_qpos - stats['qpos_mean']) / stats['qpos_std']
     pre_action_process = lambda next_action: (next_action - stats["action_mean"]) / stats["action_std"]
     rate = rospy.Rate(args.publish_rate)
+    
     while True and not rospy.is_shutdown():
-        result = ros_operator.get_frame()
+        result = ros_operator.get_frame()  # get current sensor state
         if not result:
             if print_flag:
                 print("syn fail")
@@ -201,13 +211,13 @@ def inference_process(args, config, ros_operator, policy, stats, t, pre_action):
         print_flag = True
         (img_front, img_left, img_right, img_front_depth, img_left_depth, img_right_depth,
          puppet_arm_left, puppet_arm_right, robot_base) = result
+        
         obs = collections.OrderedDict()
         image_dict = dict()
 
         image_dict[config['camera_names'][0]] = img_front
         image_dict[config['camera_names'][1]] = img_left
         image_dict[config['camera_names'][2]] = img_right
-
 
         obs['images'] = image_dict
 
@@ -229,29 +239,39 @@ def inference_process(args, config, ros_operator, policy, stats, t, pre_action):
             obs['qpos'] = np.concatenate((obs['qpos'], obs['base_vel']), axis=0)
         else:
             obs['base_vel'] = [0.0, 0.0]
-        # qpos_numpy = np.array(obs['qpos'])
-
-        # 归一化处理qpos 并转到cuda
+        
+        # current qpos ：normalization and to cuda
         qpos = pre_pos_process(obs['qpos'])
         qpos = torch.from_numpy(qpos).float().cuda().unsqueeze(0)
-        # 当前图像curr_image获取图像
+        # current image data：normalization 、hwc2chw、cuda
         curr_image = get_image(obs, config['camera_names'])
         curr_depth_image = None
+        
+        # current depth data：normalization 、hwc2chw、cuda
         if args.use_depth_image:
             curr_depth_image = get_depth_image(obs, config['camera_names'])
+        
+        # inference
         start_time = time.time()
         all_actions = policy(curr_image, curr_depth_image, qpos)
         end_time = time.time()
+        
         print("model cost time: ", end_time -start_time)
-        inference_lock.acquire()
+        inference_lock.acquire()   # lock
+        
+        # inference actions：to cpu and to np
         inference_actions = all_actions.cpu().detach().numpy()
+        
+        # get current joint state
         if pre_action is None:
             pre_action = obs['qpos']
-        # print("obs['qpos']:", obs['qpos'][7:])
+        
+        # interpolation
         if args.use_actions_interpolation:
             inference_actions = actions_interpolation(args, pre_action, inference_actions, stats)
+        
         inference_timestep = t
-        inference_lock.release()
+        inference_lock.release() # release lock
         break
 
 
@@ -262,11 +282,11 @@ def model_inference(args, config, ros_operator, save_episode=True):
     global inference_thread
     set_seed(1000)
 
-    # 1 创建模型数据  继承nn.Module
+    # 1 create model
     policy = make_policy(config['policy_class'], config['policy_config'])
     # print("model structure\n", policy.model)
     
-    # 2 加载模型权重
+    # 2 load weight of model
     ckpt_path = os.path.join(config['ckpt_dir'], config['ckpt_name'])
     state_dict = torch.load(ckpt_path)
     new_state_dict = {}
@@ -281,53 +301,56 @@ def model_inference(args, config, ros_operator, save_episode=True):
         print("ckpt path not exist")
         return False
 
-    # 3 模型设置为cuda模式和验证模式
     policy.cuda()
     policy.eval()
 
-    # 4 加载统计值
+    # 4 load stats
     stats_path = os.path.join(config['ckpt_dir'], config['ckpt_stats_name'])
     # 统计的数据  # 加载action_mean, action_std, qpos_mean, qpos_std 14维
     with open(stats_path, 'rb') as f:
         stats = pickle.load(f)
 
-    # 数据预处理和后处理函数定义
+    # Define pre-processing and post-processing
     pre_process = lambda s_qpos: (s_qpos - stats['qpos_mean']) / stats['qpos_std']
     post_process = lambda a: a * stats['qpos_std'] + stats['qpos_mean']
 
     max_publish_step = config['episode_len']
     chunk_size = config['policy_config']['chunk_size']
 
-    # 发布基础的姿态
+    # Initial joint state
     left0 = [-0.00133514404296875, 0.00209808349609375, 0.01583099365234375, -0.032616615295410156, -0.00286102294921875, 0.00095367431640625, 3.557830810546875]
     right0 = [-0.00133514404296875, 0.00438690185546875, 0.034523963928222656, -0.053597450256347656, -0.00476837158203125, -0.00209808349609375, 3.557830810546875]
     left1 = [-0.00133514404296875, 0.00209808349609375, 0.01583099365234375, -0.032616615295410156, -0.00286102294921875, 0.00095367431640625, -0.3393220901489258]
     right1 = [-0.00133514404296875, 0.00247955322265625, 0.01583099365234375, -0.032616615295410156, -0.00286102294921875, 0.00095367431640625, -0.3397035598754883]
     
+    # move arm to Initial joint state
     ros_operator.puppet_arm_publish_continuous(left0, right0)
     input("Enter any key to continue :")
     ros_operator.puppet_arm_publish_continuous(left1, right1)
     action = None
-    # 推理
+    
+    # model inference
     with torch.inference_mode():
         while True and not rospy.is_shutdown():
-            # 每个回合的步数
-            t = 0
+            t = 0      # record timestep[index]
             max_t = 0
             rate = rospy.Rate(args.publish_rate)
             if config['temporal_agg']:
+                # [500， 500+32， 14]
                 all_time_actions = np.zeros([max_publish_step, max_publish_step + chunk_size, config['state_dim']])
             while t < max_publish_step and not rospy.is_shutdown():
-                # start_time = time.time()
-                # query policy
                 if config['policy_class'] == "ACT":
                     if t >= max_t:
+                        # print("???", t)
                         pre_action = action
+
+                        # update inference_actions
                         inference_thread = threading.Thread(target=inference_process,
                                                             args=(args, config, ros_operator,
                                                                   policy, stats, t, pre_action))
                         inference_thread.start()
                         inference_thread.join()
+                        
                         inference_lock.acquire()
                         if inference_actions is not None:
                             inference_thread = None
@@ -335,8 +358,10 @@ def model_inference(args, config, ros_operator, save_episode=True):
                             inference_actions = None
                             max_t = t + args.pos_lookahead_step
                             if config['temporal_agg']:
+                                # 第t时刻 t到t+chunk_size的数据
                                 all_time_actions[[t], t:t + chunk_size] = all_actions
                         inference_lock.release()
+
                     if config['temporal_agg']:
                         actions_for_curr_step = all_time_actions[:, t]
                         actions_populated = np.all(actions_for_curr_step != 0, axis=1)
@@ -353,19 +378,19 @@ def model_inference(args, config, ros_operator, save_episode=True):
                             raw_action = all_actions[:, t % chunk_size]
                 else:
                     raise NotImplementedError
+                
                 action = post_process(raw_action[0])
-                left_action = action[:7]  # 取7维度
+                left_action = action[:7]  
                 right_action = action[7:14]
-                ros_operator.puppet_arm_publish(left_action, right_action)  # puppet_arm_publish_continuous_thread
+                print("left:", left_action)
+                print("right:", right_action)
+                
+                ros_operator.arm_joint_state_puppet_publish_interpolation_thread(left_action, right_action)
+                
                 if args.use_robot_base:
                     vel_action = action[14:16]
                     ros_operator.robot_base_publish(vel_action)
                 t += 1
-                # end_time = time.time()
-                # print("publish: ", t)
-                # print("time:", end_time - start_time)
-                # print("left_action:", left_action)
-                # print("right_action:", right_action)
                 rate.sleep()
 
 
@@ -392,6 +417,14 @@ class RosOperator:
         self.init()
         self.init_ros()
 
+        self.last_arm_joint_state_puppet_left_position = None
+        self.last_arm_joint_state_puppet_right_position = None
+
+        self.k = 3
+        self.times = np.array([i for i in range(self.k)])
+        self.arm_joint_state_puppet_left_publish_list = []
+        self.arm_joint_state_puppet_right_publish_list = []
+
     def init(self):
         self.bridge = CvBridge()
         self.img_left_deque = deque()
@@ -406,7 +439,15 @@ class RosOperator:
         self.puppet_arm_publish_lock = threading.Lock()
         self.puppet_arm_publish_lock.acquire()
 
+
     def puppet_arm_publish(self, left, right):
+        """publish joint state
+        Args:
+            left : joint state of left arm
+            right: joint state of right arm
+        """
+        print("left:", left)
+        print("right:", right)
         joint_state_msg = JointState()
         joint_state_msg.header = Header()
         joint_state_msg.header.stamp = rospy.Time.now()  # 设置时间戳
@@ -415,8 +456,15 @@ class RosOperator:
         self.puppet_arm_left_publisher.publish(joint_state_msg)
         joint_state_msg.position = right
         self.puppet_arm_right_publisher.publish(joint_state_msg)
+        self.last_arm_joint_state_puppet_left_position = left
+        self.last_arm_joint_state_puppet_right_position = right
 
     def robot_base_publish(self, vel):
+        """ publish robot chassis status
+
+        Args:
+            vel : linear.x and angular.z
+        """
         vel_msg = Twist()
         vel_msg.linear.x = vel[0]
         vel_msg.linear.y = 0
@@ -430,7 +478,7 @@ class RosOperator:
         rate = rospy.Rate(self.args.publish_rate)
         left_arm = None
         right_arm = None
-        while True and not rospy.is_shutdown():
+        while True and left_arm is None and right_arm is None and not rospy.is_shutdown():
             if len(self.puppet_arm_left_deque) != 0:
                 left_arm = list(self.puppet_arm_left_deque[-1].position)
             if len(self.puppet_arm_right_deque) != 0:
@@ -446,6 +494,7 @@ class RosOperator:
         step = 0
         while flag and not rospy.is_shutdown():
             if self.puppet_arm_publish_lock.acquire(False):
+                # print("puppet_arm_publish_lock")
                 return
             left_diff = [abs(left[i] - left_arm[i]) for i in range(len(left))]
             right_diff = [abs(right[i] - right_arm[i]) for i in range(len(right))]
@@ -462,62 +511,21 @@ class RosOperator:
                 else:
                     right_arm[i] += right_symbol[i] * self.args.arm_steps_length[i]
                     flag = True
-            joint_state_msg = JointState()
-            joint_state_msg.header = Header()
-            joint_state_msg.header.stamp = rospy.Time.now()  # 设置时间戳
-            joint_state_msg.name = ['joint0', 'joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6']  # 设置关节名称
-            joint_state_msg.position = left_arm
-            self.puppet_arm_left_publisher.publish(joint_state_msg)
-            joint_state_msg.position = right_arm
-            self.puppet_arm_right_publisher.publish(joint_state_msg)
+            self.puppet_arm_publish(left_arm, right_arm)
             step += 1
             print("puppet_arm_publish_continuous:", step)
             rate.sleep()
 
-    def puppet_arm_publish_linear(self, left, right):
-        num_step = 100
-        rate = rospy.Rate(200)
 
-        left_arm = None
-        right_arm = None
-
-        while True and not rospy.is_shutdown():
-            if len(self.puppet_arm_left_deque) != 0:
-                left_arm = list(self.puppet_arm_left_deque[-1].position)
-            if len(self.puppet_arm_right_deque) != 0:
-                right_arm = list(self.puppet_arm_right_deque[-1].position)
-            if left_arm is None or right_arm is None:
-                rate.sleep()
-                continue
-            else:
-                break
-
-        traj_left_list = np.linspace(left_arm, left, num_step)
-        traj_right_list = np.linspace(right_arm, right, num_step)
-
-        for i in range(len(traj_left_list)):
-            traj_left = traj_left_list[i]
-            traj_right = traj_right_list[i]
-            traj_left[-1] = left[-1]
-            traj_right[-1] = right[-1]
-            joint_state_msg = JointState()
-            joint_state_msg.header = Header()
-            joint_state_msg.header.stamp = rospy.Time.now()  # 设置时间戳
-            joint_state_msg.name = ['joint0', 'joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6']  # 设置关节名称
-            joint_state_msg.position = traj_left
-            self.puppet_arm_left_publisher.publish(joint_state_msg)
-            joint_state_msg.position = traj_right
-            self.puppet_arm_right_publisher.publish(joint_state_msg)
-            rate.sleep()
-
-    def puppet_arm_publish_continuous_thread(self, left, right):
+    def arm_joint_state_puppet_publish_interpolation_thread(self, left, right):
         if self.puppet_arm_publish_thread is not None:
             self.puppet_arm_publish_lock.release()
             self.puppet_arm_publish_thread.join()
             self.puppet_arm_publish_lock.acquire(False)
             self.puppet_arm_publish_thread = None
-        self.puppet_arm_publish_thread = threading.Thread(target=self.puppet_arm_publish_continuous, args=(left, right))
+        self.puppet_arm_publish_thread = threading.Thread(target=self.arm_joint_state_puppet_publish_interpolation, args=(left, right))
         self.puppet_arm_publish_thread.start()
+        self.puppet_arm_publish_thread.join()
 
     def get_frame(self):
         if len(self.img_left_deque) == 0 or len(self.img_right_deque) == 0 or len(self.img_front_deque) == 0 or \
@@ -666,6 +674,97 @@ class RosOperator:
         self.puppet_arm_left_publisher = rospy.Publisher(self.args.puppet_arm_left_cmd_topic, JointState, queue_size=10)
         self.puppet_arm_right_publisher = rospy.Publisher(self.args.puppet_arm_right_cmd_topic, JointState, queue_size=10)
         self.robot_base_publisher = rospy.Publisher(self.args.robot_base_cmd_topic, Twist, queue_size=10)
+
+    def arm_joint_state_puppet_publish_interpolation(self, left, right):
+        # print("left_target:", left)
+        # print("right_target:", right)
+        arm_left = self.last_arm_joint_state_puppet_left_position
+        arm_right = self.last_arm_joint_state_puppet_right_position
+        rate = rospy.Rate(200)
+        while True and arm_left is None and arm_right is None and not rospy.is_shutdown():
+            if self.puppet_arm_publish_lock.acquire(False):
+                return
+            
+            if len(self.puppet_arm_left_deque) != 0:
+                arm_left = list(self.puppet_arm_left_deque[-1].position)
+            if len(self.puppet_arm_right_deque) != 0:
+                arm_right = list(self.puppet_arm_right_deque[-1].position)
+            if arm_left is None or arm_right is None:
+                rate.sleep()
+                continue
+            else:
+                break
+      
+        arm = np.concatenate((np.array(arm_left), np.array(arm_right)), axis=0)
+        arm_target = np.concatenate((np.array(left), np.array(right)), axis=0)
+        
+        arm_diff = arm_target - arm
+        if max(arm_diff) > 0.5:
+            rate = rospy.Rate(30)
+            left_symbol = [1 if left[i] - arm_left[i] > 0 else -1 for i in range(len(left))]
+            right_symbol = [1 if right[i] - arm_right[i] > 0 else -1 for i in range(len(right))]
+            flag = True
+            step = 0
+            while flag and not rospy.is_shutdown():
+                if self.puppet_arm_publish_lock.acquire(False):
+                    return
+                left_diff = [abs(left[i] - arm_left[i]) for i in range(len(left))]
+                right_diff = [abs(right[i] - arm_right[i]) for i in range(len(right))]
+                flag = False
+                for i in range(len(left)):
+                    if left_diff[i] < self.args.arm_steps_length[i]:
+                        arm_left[i] = left[i]
+                    else:
+                        arm_left[i] += left_symbol[i] * self.args.arm_steps_length[i]
+                        flag = True
+                for i in range(len(right)):
+                    if right_diff[i] < self.args.arm_steps_length[i]:
+                        arm_right[i] = right[i]
+                    else:
+                        arm_right[i] += right_symbol[i] * self.args.arm_steps_length[i]
+                        flag = True
+                self.puppet_arm_publish(arm_left, arm_right)
+                step += 1
+                rate.sleep()
+        else:
+            if len(self.arm_joint_state_puppet_left_publish_list) == 0 or len(self.arm_joint_state_puppet_right_publish_list) == 0:
+                for i in range(self.k):
+                    self.arm_joint_state_puppet_left_publish_list.append(arm_left)
+                    self.arm_joint_state_puppet_right_publish_list.append(arm_right)
+            self.arm_joint_state_puppet_left_publish_list.append(left)
+            self.arm_joint_state_puppet_right_publish_list.append(right)
+            self.arm_joint_state_puppet_left_publish_list = self.arm_joint_state_puppet_left_publish_list[-self.k:]
+            self.arm_joint_state_puppet_right_publish_list = self.arm_joint_state_puppet_right_publish_list[-self.k:]
+            left_positions = [[self.arm_joint_state_puppet_left_publish_list[k][i] for k in range(self.k)] for i in range(len(left))]
+            right_positions = [[self.arm_joint_state_puppet_right_publish_list[k][i] for k in range(self.k)] for i in range(len(right))]
+            
+            left_coeffs = [self.interpolation_param(left_positions[i]) for i in range(len(left_positions))]
+            right_coeffs = [self.interpolation_param(right_positions[i]) for i in range(len(right_positions))]
+
+            hz = 200
+            step = 10
+            rate = rospy.Rate(hz)
+            for i in range(step):
+                if self.puppet_arm_publish_lock.acquire(False):
+                    return
+                left_arm = [np.polyval(left_coeffs[j][::-1], (self.k - 2) + (i + 1) * 0.05) for j in range(len(left_coeffs))]
+                right_arm = [np.polyval(right_coeffs[j][::-1], (self.k - 2) + (i + 1) * 0.05) for j in range(len(right_coeffs))]
+                self.puppet_arm_publish(left_arm, right_arm)
+                rate.sleep()
+
+    def interpolation_param(self, positions):
+        positions = np.array(positions)
+        # 构建矩阵A和向量b
+        A = [np.ones_like(self.times)]
+        for i in range(self.k - 1):
+            A.append(self.times ** (i + 1))
+        A = np.vstack(A).T
+        b = positions
+        # 解线性方程组得到多项式系数
+        coeffs = np.linalg.solve(A, b)
+        # 使用多项式系数计算给定时间的速度
+        return coeffs
+
 
 
 def get_arguments():
