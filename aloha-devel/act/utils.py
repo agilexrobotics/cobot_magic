@@ -41,7 +41,7 @@ class EpisodicDataset(torch.utils.data.Dataset):
                 original_action_shape = (original_action_shape[0], original_action_shape[1] + 2)
 
             start_ts = np.random.choice(max_action_len)  # 随机抽取一个索引
-            actions = root['/observations/qpos'][1:]
+            actions = root['/action'][1:]
             actions = np.append(actions, actions[-1][np.newaxis, :], axis=0)
             qpos = root['/observations/qpos'][start_ts]
             if self.use_robot_base:
@@ -98,7 +98,7 @@ class EpisodicDataset(torch.utils.data.Dataset):
         qpos_data = (qpos_data - self.norm_stats["qpos_mean"]) / self.norm_stats["qpos_std"]
         action_data = torch.from_numpy(padded_action).float()
         action_is_pad = torch.from_numpy(action_is_pad).bool()
-        action_data = (action_data - self.norm_stats["qpos_mean"]) / self.norm_stats["qpos_std"]
+        action_data = (action_data - self.norm_stats["action_mean"]) / self.norm_stats["action_std"]
 
         # torch.set_printoptions(precision=10, sci_mode=False)
         # torch.set_printoptions(threshold=float('inf'))
