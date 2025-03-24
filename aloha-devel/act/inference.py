@@ -42,7 +42,7 @@ inference_timestep = None
 def actions_interpolation(args, pre_action, actions, stats):
     steps = np.concatenate((np.array(args.arm_steps_length), np.array(args.arm_steps_length)), axis=0)
     pre_process = lambda s_qpos: (s_qpos - stats['qpos_mean']) / stats['qpos_std']
-    post_process = lambda a: a * stats['qpos_std'] + stats['qpos_mean']
+    post_process = lambda a: a * stats['action_std'] + stats['action_mean']
     result = [pre_action]
     post_action = post_process(actions[0])
     # print("pre_action:", pre_action[7:])
@@ -293,7 +293,7 @@ def model_inference(args, config, ros_operator, save_episode=True):
 
     # 数据预处理和后处理函数定义
     pre_process = lambda s_qpos: (s_qpos - stats['qpos_mean']) / stats['qpos_std']
-    post_process = lambda a: a * stats['qpos_std'] + stats['qpos_mean']
+    post_process = lambda a: a * stats['action_std'] + stats['action_mean']
 
     max_publish_step = config['episode_len']
     chunk_size = config['policy_config']['chunk_size']
